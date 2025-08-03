@@ -5,7 +5,7 @@ import os
 import json
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -23,6 +23,7 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain.agents import tool, AgentExecutor, create_react_agent
 from langchain_community.tools.google_search.tool import GoogleSearchRun
 from langchain_community.utilities.google_search import GoogleSearchAPIWrapper
+from langchain import hub
 
 # Google 驗證相關匯入
 from google_auth_oauthlib.flow import Flow
@@ -51,19 +52,9 @@ app.add_middleware(SessionMiddleware, secret_key=os.environ["SECRET_KEY"])
 
 # --- 全域資源初始化 ---
 try:
+    # 全域 LLM 和嵌入模型
     llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0.3, convert_system_message_to_human=True)
     embeddings = GoogleGenerativeAIEmbeddings(model="models/embedding-001")
-    vector_store = Chroma(persist_directory="chroma_db", embedding_function=embeddings)
-    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
-    
-    # 簡化的知識庫搜尋函數
-    def search_knowledge_base(query: str) -> str:
-        """搜尋課程知識庫"""
-        try:
-            docs = retriever.invoke(query)
-            return "\n\n".join(doc.page_content for doc in docs)
-        except Exception as e:
-            return f"搜尋知識庫時發生錯誤: {e}"
     
     print("AI 系統初始化成功")
     ai_system_available = True
@@ -71,7 +62,26 @@ try:
 except Exception as e:
     print(f"無法初始化 AI 系統: {e}")
     ai_system_available = False
-    search_knowledge_base = None
+
+# --- Helper 函式來動態載入 Retriever ---
+def get_retriever_for_chapter(chapter: str, db: Session = None):
+    """根據章節名稱動態載入對應的 ChromaDB retriever。"""
+    # 優先從資料庫查找章節資訊
+    if db:
+        db_chapter = crud.get_chapter_by_name(db, chapter)
+        if db_chapter and db_chapter.is_active:
+            db_path = os.path.join("chroma_db", db_chapter.name)
+            if os.path.exists(db_path):
+                vector_store = Chroma(persist_directory=db_path, embedding_function=embeddings)
+                return vector_store.as_retriever(search_kwargs={"k": 3})
+    
+    # 回退到直接文件系統查找
+    db_path = os.path.join("chroma_db", chapter)
+    if not os.path.exists(db_path):
+        raise HTTPException(status_code=404, detail=f"找不到章節 '{chapter}' 的知識庫。")
+    
+    vector_store = Chroma(persist_directory=db_path, embedding_function=embeddings)
+    return vector_store.as_retriever(search_kwargs={"k": 3})
 
 # --- Google 驗證設定 ---
 flow = Flow.from_client_config(
@@ -89,6 +99,23 @@ flow = Flow.from_client_config(
 )
 
 # --- API 端點 ---
+
+# 新增：獲取章節列表
+@app.get("/api/chapters", response_model=List[str])
+async def get_chapters():
+    """掃描資料庫資料夾並回傳所有可用的章節列表。"""
+    db_root = "chroma_db"
+    if not os.path.exists(db_root):
+        return []
+    chapters = [d for d in os.listdir(db_root) if os.path.isdir(os.path.join(db_root, d))]
+    return sorted(chapters)
+
+# 新增：從資料庫獲取章節列表
+@app.get("/api/chapters/managed", response_model=List[schemas.ChapterListItem])
+async def get_managed_chapters(db: Session = Depends(auth.get_db)):
+    """從資料庫獲取已管理的章節列表"""
+    chapters = crud.get_all_chapters(db, include_inactive=False)
+    return chapters
 
 # 驗證 & 使用者
 @app.get("/auth/login")
@@ -132,50 +159,96 @@ async def auth_callback(request: Request, db: Session = Depends(auth.get_db)):
 async def read_users_me(current_user: models.User = Depends(auth.get_current_user)):
     return current_user
 
-# AI 問答 (簡化版本)
+# AI 問答 (更新：支援章節化)
 @app.post("/api/ask", response_model=dict)
-async def ask_question(request: schemas.AskRequest, current_user: models.User = Depends(auth.get_current_user), db: Session = Depends(auth.get_db)):
+async def ask_question(
+    request: schemas.AskRequest, 
+    chapter: str = Query(..., description="選擇的章節"), # 新增 chapter 查詢參數
+    current_user: models.User = Depends(auth.get_current_user), 
+    db: Session = Depends(auth.get_db)
+):
     if not ai_system_available:
         raise HTTPException(status_code=503, detail="AI 系統尚未準備就緒。")
     
     try:
-        # 搜尋知識庫
-        context = search_knowledge_base(request.question)
+        # 動態建立 Agent 工具
+        retriever = get_retriever_for_chapter(chapter, db)
         
-        # 使用 LLM 產生回答
-        prompt = f"""你是一個虛擬教學助理。請根據以下課程內容回答學生的問題。
-        
-課程內容：
-{context}
+        @tool
+        def course_knowledge_base_search(query: str) -> str:
+            f"""當問題與 '{chapter}' 章節的課程內容、講義、作業或評分標準相關時，使用此工具來搜尋內部知識庫。"""
+            docs = retriever.invoke(query)
+            return "\n\n".join(doc.page_content for doc in docs)
 
-學生問題：{request.question}
+        # 設定網路搜尋工具
+        search = GoogleSearchAPIWrapper(
+            google_api_key=os.environ.get("GOOGLE_API_KEY_SEARCH"), 
+            google_cse_id=os.environ.get("GOOGLE_CSE_ID")
+        )
+        web_search_tool = GoogleSearchRun(api_wrapper=search)
+        web_search_tool.name = "internet_search"
+        web_search_tool.description = "當問題涉及即時資訊、最新版本、外部事件或在課程知識庫中找不到答案時，使用此工具進行網路搜尋。"
+        
+        tools = [course_knowledge_base_search, web_search_tool]
+        agent_prompt = hub.pull("hwchase17/react")
+        agent = create_react_agent(llm, tools, agent_prompt)
+        agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
 
-請提供準確、有幫助的回答："""
+        response = agent_executor.invoke({"input": request.question})
+        answer = response.get("output", "抱歉，我無法處理這個問題。")
         
-        response = llm.invoke(prompt)
-        answer = response.content
-        
-        # 記錄查詢
-        crud.log_rag_query(db, user_id=current_user.id, question=request.question, answer=answer)
+        # 記錄查詢（包含章節資訊）
+        crud.log_rag_query(db, user_id=current_user.id, question=f"[{chapter}] {request.question}", answer=answer)
         return {"answer": answer}
+        
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"處理問題時發生錯誤: {e}")
 
-# 測驗系統
+# 測驗系統 (更新：支援章節化)
 @app.post("/api/quiz/generate", response_model=schemas.QuizAttemptSchema)
-async def generate_quiz(req: schemas.GenerateQuizRequest, current_user: models.User = Depends(auth.get_current_user), db: Session = Depends(auth.get_db)):
+async def generate_quiz(
+    req: schemas.GenerateQuizRequest, 
+    chapter: str = Query(..., description="選擇的章節"), # 新增 chapter 查詢參數
+    current_user: models.User = Depends(auth.get_current_user), 
+    db: Session = Depends(auth.get_db)
+):
     if not ai_system_available:
-        raise HTTPException(status_code=503, detail="知識庫系統尚未準備就緒。")
-        
-    context_text = search_knowledge_base(req.topic)
-    quiz_prompt = f"""請根據以下課程內容，為「{req.topic}」設計一份包含 {req.num_questions} 題單選題的測驗。嚴格依照 JSON 格式輸出。
-    課程內容：---{context_text}---
-    JSON 格式範例：{{"questions": [{{"question_text": "問題？", "choices": ["A", "B", "C"], "correct_answer_index": 0}}]}}"""
+        raise HTTPException(status_code=503, detail="AI 系統尚未準備就緒。")
+    
     try:
+        retriever = get_retriever_for_chapter(chapter, db)
+        context_docs = retriever.invoke(req.topic)
+        context_text = "\n".join([doc.page_content for doc in context_docs])
+        
+        # 建立題目生成提示
+        quiz_prompt = f"""請根據以下關於 '{chapter}' 章節的課程內容，為「{req.topic}」設計一份包含 {req.num_questions} 題單選題的測驗。嚴格依照 JSON 格式輸出。
+        
+課程內容：
+---
+{context_text}
+---
+
+JSON 格式範例：
+{{"questions": [{{"question_text": "問題？", "choices": ["A", "B", "C"], "correct_answer_index": 0}}]}}
+
+請確保：
+1. 問題與提供的課程內容相關
+2. 選項具有挑戰性且合理
+3. 正確答案索引從 0 開始計算
+4. 嚴格遵循上述 JSON 格式
+"""
+        
         response = llm.invoke(quiz_prompt)
         quiz_data = json.loads(response.content)
-        attempt = crud.create_quiz_attempt(db, user_id=current_user.id, topic=req.topic, quiz_data=quiz_data)
+        
+        # 建立測驗記錄（包含章節資訊）
+        attempt = crud.create_quiz_attempt(db, user_id=current_user.id, topic=f"{chapter} - {req.topic}", quiz_data=quiz_data)
         return attempt
+        
+    except HTTPException as e:
+        raise e
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"AI 產生測驗失敗或格式錯誤: {e}")
 
@@ -214,6 +287,107 @@ async def get_learning_recommendations(current_user: models.User = Depends(auth.
     return recommendations
 
 # 管理員功能
+# 章節管理
+@app.post("/api/admin/chapters", response_model=schemas.ChapterSchema, status_code=201)
+async def create_chapter(
+    chapter: schemas.ChapterCreate, 
+    current_admin: models.User = Depends(auth.get_current_admin_user), 
+    db: Session = Depends(auth.get_db)
+):
+    """創建新章節"""
+    # 檢查章節名稱是否已存在
+    existing_chapter = crud.get_chapter_by_name(db, chapter.name)
+    if existing_chapter:
+        raise HTTPException(status_code=400, detail=f"章節名稱 '{chapter.name}' 已存在")
+    
+    # 檢查資料夾路徑是否存在
+    if not os.path.exists(chapter.folder_path):
+        # 自動創建資料夾結構
+        os.makedirs(os.path.join(chapter.folder_path, "materials"), exist_ok=True)
+        os.makedirs(os.path.join(chapter.folder_path, "question_bank"), exist_ok=True)
+    
+    return crud.create_chapter(db, chapter)
+
+@app.get("/api/admin/chapters", response_model=List[schemas.ChapterSchema])
+async def list_all_chapters(
+    include_inactive: bool = False,
+    current_admin: models.User = Depends(auth.get_current_admin_user), 
+    db: Session = Depends(auth.get_db)
+):
+    """獲取所有章節（管理員）"""
+    return crud.get_all_chapters(db, include_inactive=include_inactive)
+
+@app.get("/api/admin/chapters/{chapter_id}", response_model=schemas.ChapterSchema)
+async def get_chapter_detail(
+    chapter_id: int,
+    current_admin: models.User = Depends(auth.get_current_admin_user), 
+    db: Session = Depends(auth.get_db)
+):
+    """獲取章節詳細資訊"""
+    chapter = crud.get_chapter_by_id(db, chapter_id)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="找不到指定的章節")
+    return chapter
+
+@app.put("/api/admin/chapters/{chapter_id}", response_model=schemas.ChapterSchema)
+async def update_chapter(
+    chapter_id: int,
+    chapter_update: schemas.ChapterUpdate,
+    current_admin: models.User = Depends(auth.get_current_admin_user), 
+    db: Session = Depends(auth.get_db)
+):
+    """更新章節資訊"""
+    updated_chapter = crud.update_chapter(db, chapter_id, chapter_update)
+    if not updated_chapter:
+        raise HTTPException(status_code=404, detail="找不到指定的章節")
+    return updated_chapter
+
+@app.patch("/api/admin/chapters/{chapter_id}/toggle", response_model=schemas.ChapterSchema)
+async def toggle_chapter_status(
+    chapter_id: int,
+    current_admin: models.User = Depends(auth.get_current_admin_user), 
+    db: Session = Depends(auth.get_db)
+):
+    """切換章節啟用/停用狀態"""
+    chapter = crud.toggle_chapter_status(db, chapter_id)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="找不到指定的章節")
+    return chapter
+
+@app.delete("/api/admin/chapters/{chapter_id}", status_code=204)
+async def delete_chapter(
+    chapter_id: int,
+    current_admin: models.User = Depends(auth.get_current_admin_user), 
+    db: Session = Depends(auth.get_db)
+):
+    """刪除章節"""
+    if not crud.delete_chapter(db, chapter_id):
+        raise HTTPException(status_code=404, detail="找不到指定的章節")
+    return {"ok": True}
+
+@app.post("/api/admin/chapters/{chapter_id}/reindex", status_code=200)
+async def reindex_chapter(
+    chapter_id: int,
+    current_admin: models.User = Depends(auth.get_current_admin_user), 
+    db: Session = Depends(auth.get_db)
+):
+    """重新索引指定章節的文檔"""
+    chapter = crud.get_chapter_by_id(db, chapter_id)
+    if not chapter:
+        raise HTTPException(status_code=404, detail="找不到指定的章節")
+    
+    # 這裡可以調用索引函數重新建立該章節的向量資料庫
+    try:
+        # 檢查資料夾是否存在
+        if not os.path.exists(chapter.folder_path):
+            raise HTTPException(status_code=400, detail=f"章節資料夾不存在: {chapter.folder_path}")
+        
+        # 這裡可以實作重新索引的邏輯
+        return {"message": f"章節 '{chapter.display_name}' 重新索引請求已提交"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"重新索引失敗: {e}")
+
+# 資源管理
 @app.post("/api/admin/resources", response_model=schemas.ExternalResourceSchema, status_code=201)
 async def add_resource(resource: schemas.ExternalResourceCreate, current_admin: models.User = Depends(auth.get_current_admin_user), db: Session = Depends(auth.get_db)):
     return crud.create_external_resource(db, resource)

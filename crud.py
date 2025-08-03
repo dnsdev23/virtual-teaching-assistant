@@ -102,3 +102,65 @@ def get_most_queried_topics(db: Session, limit: int = 5) -> List[Dict]:
         func.count(models.RAGQueryLog.id).label('query_count')
     ).group_by(models.RAGQueryLog.question).order_by(func.count(models.RAGQueryLog.id).desc()).limit(limit).all()
     return [{"question": r.question, "count": r.query_count} for r in results]
+
+# --- Chapter Management CRUD ---
+def create_chapter(db: Session, chapter: schemas.ChapterCreate):
+    """創建新章節"""
+    db_chapter = models.Chapter(**chapter.model_dump())
+    db.add(db_chapter)
+    db.commit()
+    db.refresh(db_chapter)
+    return db_chapter
+
+def get_chapter_by_name(db: Session, name: str):
+    """根據名稱獲取章節"""
+    return db.query(models.Chapter).filter(models.Chapter.name == name).first()
+
+def get_chapter_by_id(db: Session, chapter_id: int):
+    """根據 ID 獲取章節"""
+    return db.query(models.Chapter).filter(models.Chapter.id == chapter_id).first()
+
+def get_all_chapters(db: Session, include_inactive: bool = False):
+    """獲取所有章節"""
+    query = db.query(models.Chapter)
+    if not include_inactive:
+        query = query.filter(models.Chapter.is_active == 1)
+    return query.order_by(models.Chapter.name).all()
+
+def get_active_chapter_names(db: Session) -> List[str]:
+    """獲取所有啟用章節的名稱列表"""
+    chapters = db.query(models.Chapter.name).filter(models.Chapter.is_active == 1).all()
+    return [chapter.name for chapter in chapters]
+
+def update_chapter(db: Session, chapter_id: int, chapter_update: schemas.ChapterUpdate):
+    """更新章節資訊"""
+    db_chapter = get_chapter_by_id(db, chapter_id)
+    if not db_chapter:
+        return None
+    
+    update_data = chapter_update.model_dump(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(db_chapter, field, value)
+    
+    db.commit()
+    db.refresh(db_chapter)
+    return db_chapter
+
+def delete_chapter(db: Session, chapter_id: int):
+    """刪除章節"""
+    db_chapter = get_chapter_by_id(db, chapter_id)
+    if db_chapter:
+        db.delete(db_chapter)
+        db.commit()
+        return True
+    return False
+
+def toggle_chapter_status(db: Session, chapter_id: int):
+    """切換章節啟用/停用狀態"""
+    db_chapter = get_chapter_by_id(db, chapter_id)
+    if db_chapter:
+        db_chapter.is_active = 1 - db_chapter.is_active  # 0變1，1變0
+        db.commit()
+        db.refresh(db_chapter)
+        return db_chapter
+    return None

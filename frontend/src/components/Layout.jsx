@@ -26,7 +26,10 @@ const Layout = ({ children }) => {
                     <Link to="/quiz" className="block px-4 py-2 rounded hover:bg-gray-700">隨堂測驗</Link>
                     <Link to="/history" className="block px-4 py-2 rounded hover:bg-gray-700">學習歷程</Link>
                     {user?.role === 'admin' && (
-                        <Link to="/admin" className="block px-4 py-2 rounded bg-yellow-500 text-black font-bold hover:bg-yellow-600">管理後台</Link>
+                        <>
+                            <Link to="/admin" className="block px-4 py-2 rounded bg-yellow-500 text-black font-bold hover:bg-yellow-600">管理後台</Link>
+                            <Link to="/admin/chapters" className="block px-4 py-2 rounded bg-purple-500 text-white font-bold hover:bg-purple-600">章節管理</Link>
+                        </>
                     )}
                 </nav>
                 <div className="p-4 border-t border-gray-700">

@@ -65,3 +65,14 @@ class RAGQueryLog(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
     user = relationship("User", back_populates="query_logs")
+
+class Chapter(Base):
+    __tablename__ = "chapters"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, unique=True)  # 章節名稱，如 "chapter1"
+    display_name = Column(String, nullable=False)       # 顯示名稱，如 "第一章：機器學習導論"
+    description = Column(Text)                          # 章節描述
+    folder_path = Column(String, nullable=False)        # 資料夾路徑，如 "data/chapter1"
+    is_active = Column(Integer, default=1)              # 是否啟用 (1=啟用, 0=停用)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

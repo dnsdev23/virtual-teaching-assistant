@@ -50,11 +50,62 @@ const request = async (endpoint, options = {}) => {
 
 // --- API 函式 ---
 export const getUserProfile = () => request('/api/users/me');
-export const askQuestion = (question) => request('/api/ask', {
+
+// 獲取可用章節列表
+export const getChapters = () => request('/api/chapters');
+
+// 章節化問答
+export const askQuestion = (question, chapter) => request(`/api/ask?chapter=${encodeURIComponent(chapter)}`, {
     method: 'POST',
     body: JSON.stringify({ question }),
 });
 
-// 之後可以陸續加入更多 API 呼叫...
-// export const generateQuiz = (topic) => ...
-// export const getQuizHistory = () => ...
+// 章節化測驗生成
+export const generateQuiz = (topic, numQuestions, chapter) => request(`/api/quiz/generate?chapter=${encodeURIComponent(chapter)}`, {
+    method: 'POST',
+    body: JSON.stringify({ 
+        topic,
+        num_questions: numQuestions 
+    }),
+});
+
+// 提交測驗答案
+export const submitQuiz = (attemptId, answers) => request(`/api/quiz/submit/${attemptId}`, {
+    method: 'POST',
+    body: JSON.stringify({ answers }),
+});
+
+// 獲取測驗歷史
+export const getQuizHistory = () => request('/api/quiz/history');
+
+// 獲取學習建議
+export const getLearningRecommendations = () => request('/api/recommendations');
+
+// Admin chapter management APIs
+export const getAdminChapters = () => request('/api/admin/chapters');
+export const createChapter = (chapterData) => request('/api/admin/chapters', {
+    method: 'POST',
+    body: JSON.stringify(chapterData),
+});
+export const updateChapter = (chapterId, chapterData) => request(`/api/admin/chapters/${chapterId}`, {
+    method: 'PUT',
+    body: JSON.stringify(chapterData),
+});
+export const deleteChapter = (chapterId) => request(`/api/admin/chapters/${chapterId}`, {
+    method: 'DELETE',
+});
+export const reindexChapter = (chapterId) => request(`/api/admin/chapters/${chapterId}/reindex`, {
+    method: 'POST',
+});
+
+// Admin analytics APIs
+export const getAdminResources = () => request('/api/admin/resources');
+export const addAdminResource = (resourceData) => request('/api/admin/resources', {
+    method: 'POST',
+    body: JSON.stringify(resourceData),
+});
+export const deleteAdminResource = (resourceId) => request(`/api/admin/resources/${resourceId}`, {
+    method: 'DELETE',
+});
+export const getAdminQueryLogs = () => request('/api/admin/analytics/query-logs');
+export const getAdminQuizAttempts = () => request('/api/admin/analytics/quiz-attempts');

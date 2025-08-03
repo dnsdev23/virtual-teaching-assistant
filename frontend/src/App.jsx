@@ -11,6 +11,7 @@ import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 import CallbackPage from './pages/CallbackPage';
 import ChatPage from './pages/ChatPage';
+import AdminChapterPage from './pages/AdminChapterPage';
 
 // Placeholder Pages
 const QuizPage = () => <div className="p-8"><h1>隨堂測驗</h1><p>此功能正在開發中...</p></div>;
@@ -62,6 +63,16 @@ function App() {
                             <ProtectedRoute adminOnly={true}>
                                 <Layout>
                                     <AdminDashboard />
+                                </Layout>
+                            </ProtectedRoute>
+                        } 
+                    />
+                    <Route 
+                        path="/admin/chapters" 
+                        element={
+                            <ProtectedRoute adminOnly={true}>
+                                <Layout>
+                                    <AdminChapterPage />
                                 </Layout>
                             </ProtectedRoute>
                         } 

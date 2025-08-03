@@ -3,7 +3,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { askQuestion } from '../services/api';
+import { askQuestion, getChapters } from '../services/api';
 
 // Icons
 const SendIcon = () => (
@@ -33,16 +33,35 @@ const ChatPage = () => {
     const [messages, setMessages] = useState([]);
     const [inputMessage, setInputMessage] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [chapters, setChapters] = useState([]);
+    const [selectedChapter, setSelectedChapter] = useState('');
     const messagesEndRef = useRef(null);
 
     useEffect(() => {
-        if (user) {
+        // 載入可用章節
+        const loadChapters = async () => {
+            try {
+                const chapterList = await getChapters();
+                setChapters(chapterList);
+                if (chapterList.length > 0) {
+                    setSelectedChapter(chapterList[0]);
+                }
+            } catch (error) {
+                console.error('載入章節列表失敗:', error);
+            }
+        };
+        
+        loadChapters();
+    }, []);
+
+    useEffect(() => {
+        if (user && selectedChapter) {
             setMessages([{ 
                 sender: 'bot', 
-                text: `你好，${user.name}！我是你的虛擬助教，有什麼問題儘管問我。` 
+                text: `你好，${user.name}！我是你的虛擬助教。目前選擇的章節是「${selectedChapter}」，有什麼問題儘管問我。` 
             }]);
         }
-    }, [user]);
+    }, [user, selectedChapter]);
 
     const scrollToBottom = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -52,7 +71,7 @@ const ChatPage = () => {
 
     const handleSendMessage = async (e) => {
         e.preventDefault();
-        if (!inputMessage.trim() || isLoading) return;
+        if (!inputMessage.trim() || isLoading || !selectedChapter) return;
 
         const userMessage = { sender: 'user', text: inputMessage };
         setMessages(prev => [...prev, userMessage]);
@@ -60,7 +79,7 @@ const ChatPage = () => {
         setIsLoading(true);
 
         try {
-            const data = await askQuestion(inputMessage);
+            const data = await askQuestion(inputMessage, selectedChapter);
             setMessages(prev => [...prev, { sender: 'bot', text: data.answer }]);
         } catch (error) {
             setMessages(prev => [...prev, { sender: 'bot', text: '抱歉，發生錯誤，請稍後再試。' }]);
@@ -71,6 +90,29 @@ const ChatPage = () => {
 
     return (
         <div className="flex flex-col h-full">
+            {/* Chapter Selection */}
+            {chapters.length > 0 && (
+                <div className="p-4 bg-white border-b border-gray-200">
+                    <div className="flex items-center space-x-4">
+                        <label htmlFor="chapter-select" className="text-sm font-medium text-gray-700">
+                            選擇章節：
+                        </label>
+                        <select
+                            id="chapter-select"
+                            value={selectedChapter}
+                            onChange={(e) => setSelectedChapter(e.target.value)}
+                            className="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                        >
+                            {chapters.map((chapter) => (
+                                <option key={chapter} value={chapter}>
+                                    {chapter}
+                                </option>
+                            ))}
+                        </select>
+                    </div>
+                </div>
+            )}
+
             {/* Chat Messages */}
             <main className="flex-1 overflow-y-auto p-6 space-y-6">
                 {messages.map((msg, index) => (
