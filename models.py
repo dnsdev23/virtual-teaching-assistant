@@ -15,11 +15,13 @@ class User(Base):
     role = Column(String, default="user", nullable=False)
     
     quiz_attempts = relationship("QuizAttempt", back_populates="user")
+    query_logs = relationship("RAGQueryLog", back_populates="user")
 
 class QuizAttempt(Base):
     __tablename__ = "quiz_attempts"
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"))
+    topic = Column(String) # 新增欄位來記錄測驗主題
     score = Column(Float)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     
@@ -53,3 +55,13 @@ class ExternalResource(Base):
     title = Column(String, nullable=False)
     description = Column(Text)
     tags = Column(String) # Comma-separated tags for searching
+
+class RAGQueryLog(Base):
+    __tablename__ = "rag_query_logs"
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    question = Column(Text, nullable=False)
+    answer = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    user = relationship("User", back_populates="query_logs")
