@@ -109,3 +109,6 @@ export const deleteAdminResource = (resourceId) => request(`/api/admin/resources
 });
 export const getAdminQueryLogs = () => request('/api/admin/analytics/query-logs');
 export const getAdminQuizAttempts = () => request('/api/admin/analytics/quiz-attempts');
+
+// Admin folder management
+export const getAvailableFolders = () => request('/api/admin/folders');
