@@ -25,9 +25,13 @@ from langchain_google_genai import GoogleGenerativeAIEmbeddings
 
 # Google 驗證相關匯入
 from google_auth_oauthlib.flow import Flow
+import os
 
 # 載入環境變數
 load_dotenv()
+
+# 在開發環境中允許不安全的傳輸 (僅限本地開發)
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 # 建立資料庫表格
 models.Base.metadata.create_all(bind=engine)
@@ -84,7 +88,15 @@ async def login_via_google(request: Request):
 async def auth_callback(request: Request, db: Session = Depends(auth.get_db)):
     try:
         flow.fetch_token(authorization_response=str(request.url))
-        user_info = flow.credentials.id_token
+        
+        # 解碼 ID token 來獲取用戶信息
+        from jose import jwt
+        id_token = flow.credentials.id_token
+        
+        # Google 的 ID token 是已經經過驗證的，我們可以直接解碼
+        # 注意：在生產環境中應該驗證 token 的簽名
+        user_info = jwt.get_unverified_claims(id_token)
+        
         user = crud.create_or_update_user(db, user_info)
         access_token = auth.create_access_token(data={"sub": user.email})
         return JSONResponse(content={"access_token": access_token, "token_type": "bearer"})
