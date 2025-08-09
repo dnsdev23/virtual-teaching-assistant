@@ -7,16 +7,26 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError, jwt
 from sqlalchemy.orm import Session
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
+from pathlib import Path
 import crud, models
 from database import SessionLocal
 
-# 載入環境變數
-load_dotenv()
+# 載入環境變數（明確指定專案根目錄 .env 檔案）
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=str(ENV_PATH), override=False, encoding="utf-8")
+# 退回方案：若環境變數仍缺失，直接讀取 .env 並補入 os.environ
+if not os.environ.get("SECRET_KEY"):
+    for k, v in dotenv_values(str(ENV_PATH), encoding="utf-8").items():
+        if k and v is not None and k not in os.environ:
+            os.environ[k] = v
+# 最終保險：仍沒有 SECRET_KEY 時，產生一次性金鑰避免崩潰（僅供本機啟動）
+if not os.environ.get("SECRET_KEY"):
+    os.environ["SECRET_KEY"] = os.urandom(32).hex()
 
 SECRET_KEY = os.environ["SECRET_KEY"]
-ALGORITHM = os.environ["ALGORITHM"]
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ["ACCESS_TOKEN_EXPIRE_MINUTES"])
+ALGORITHM = os.environ.get("ALGORITHM", "HS256")
+ACCESS_TOKEN_EXPIRE_MINUTES = int(os.environ.get("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
 

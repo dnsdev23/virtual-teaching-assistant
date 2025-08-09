@@ -4,13 +4,14 @@
 import os
 import json
 import requests
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values
 from fastapi import FastAPI, Depends, HTTPException, Request, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 from typing import List
+from pathlib import Path
 
 # 匯入我們自己的模組
 import models, crud, auth, schemas
@@ -28,8 +29,16 @@ from langchain import hub
 # Google 驗證相關匯入
 from google_auth_oauthlib.flow import Flow
 
-# 載入環境變數
-load_dotenv()
+# 載入環境變數（明確指定專案根目錄 .env 檔案）
+ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=ENV_PATH, override=False)
+if not os.environ.get("SECRET_KEY"):
+    for k, v in dotenv_values(ENV_PATH).items():
+        if k and v is not None and k not in os.environ:
+            os.environ[k] = v
+# 確保 SECRET_KEY 存在（若仍缺少則產生一次性值）
+if not os.environ.get("SECRET_KEY"):
+    os.environ["SECRET_KEY"] = os.urandom(32).hex()
 
 # 在開發環境中允許不安全的傳輸 (僅限本地開發)
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
@@ -83,20 +92,25 @@ def get_retriever_for_chapter(chapter: str, db: Session = None):
     vector_store = Chroma(persist_directory=db_path, embedding_function=embeddings)
     return vector_store.as_retriever(search_kwargs={"k": 3})
 
-# --- Google 驗證設定 ---
-flow = Flow.from_client_config(
-    client_config={
-        "web": {
-            "client_id": os.environ['GOOGLE_CLIENT_ID'],
-            "client_secret": os.environ['GOOGLE_CLIENT_SECRET'],
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": ["http://127.0.0.1:8000/auth/callback"],
-        }
-    },
-    scopes=['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile'],
-    redirect_uri="http://127.0.0.1:8000/auth/callback"
-)
+# --- Google 驗證設定（若憑證缺失則停用登入流程） ---
+GOOGLE_CLIENT_ID = os.environ.get('GOOGLE_CLIENT_ID')
+GOOGLE_CLIENT_SECRET = os.environ.get('GOOGLE_CLIENT_SECRET')
+if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+    flow = Flow.from_client_config(
+        client_config={
+            "web": {
+                "client_id": GOOGLE_CLIENT_ID,
+                "client_secret": GOOGLE_CLIENT_SECRET,
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "redirect_uris": ["http://127.0.0.1:8000/auth/callback"],
+            }
+        },
+        scopes=['openid', 'https://www.googleapis.com/auth/userinfo.email', 'https://www.googleapis.com/auth/userinfo.profile'],
+        redirect_uri="http://127.0.0.1:8000/auth/callback"
+    )
+else:
+    flow = None
 
 # --- API 端點 ---
 
@@ -120,38 +134,33 @@ async def get_managed_chapters(db: Session = Depends(auth.get_db)):
 # 驗證 & 使用者
 @app.get("/auth/login")
 async def login_via_google(request: Request):
+    if not flow:
+        raise HTTPException(status_code=503, detail="Google OAuth 未設定，請設定 GOOGLE_CLIENT_ID/SECRET")
     authorization_url, state = flow.authorization_url(access_type='offline', include_granted_scopes='true')
     request.session['state'] = state
     return RedirectResponse(authorization_url)
 
 @app.get("/auth/callback")
 async def auth_callback(request: Request, db: Session = Depends(auth.get_db)):
+    if not flow:
+        raise HTTPException(status_code=503, detail="Google OAuth 未設定，無法完成登入")
     try:
         flow.fetch_token(authorization_response=str(request.url))
-        
         # 正確地取得使用者資訊
         credentials = flow.credentials
-        
         # 使用 Google API 取得使用者資訊
         import requests
         userinfo_response = requests.get(
             'https://www.googleapis.com/oauth2/v2/userinfo',
             headers={'Authorization': f'Bearer {credentials.token}'}
         )
-        
         if not userinfo_response.ok:
             raise Exception("無法從 Google 取得使用者資訊")
-            
         user_info = userinfo_response.json()
-        
         user = crud.create_or_update_user(db, user_info)
         access_token = auth.create_access_token(data={"sub": user.email})
-        
-        # *** 修改這裡 ***
-        # 從直接回傳 JSON 改為重新導向到前端的 callback 頁面
         frontend_callback_url = f"http://localhost:5173/auth/callback?token={access_token}"
         return RedirectResponse(frontend_callback_url)
-
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"驗證失敗: {e}")
 
