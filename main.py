@@ -387,32 +387,6 @@ async def reindex_chapter(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"重新索引失敗: {e}")
 
-@app.get("/api/admin/folders", response_model=List[str])
-async def get_available_folders(
-    current_admin: models.User = Depends(auth.get_current_admin_user)
-):
-    """獲取可用的資料夾路徑列表"""
-    folders = []
-    
-    # 掃描常見的資料夾結構
-    base_paths = ['materials', 'data', 'content']
-    
-    for base_path in base_paths:
-        if os.path.exists(base_path):
-            try:
-                for item in os.listdir(base_path):
-                    item_path = os.path.join(base_path, item)
-                    if os.path.isdir(item_path):
-                        # 標準化路徑分隔符
-                        folder_path = item_path.replace('\\', '/')
-                        folders.append(folder_path)
-            except (OSError, PermissionError):
-                continue
-    
-    # 移除重複並排序
-    folders = sorted(list(set(folders)))
-    return folders
-
 # 資源管理
 @app.post("/api/admin/resources", response_model=schemas.ExternalResourceSchema, status_code=201)
 async def add_resource(resource: schemas.ExternalResourceCreate, current_admin: models.User = Depends(auth.get_current_admin_user), db: Session = Depends(auth.get_db)):

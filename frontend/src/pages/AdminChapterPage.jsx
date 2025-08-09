@@ -6,7 +6,6 @@ import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import Toast from '../components/Toast';
-import FolderSelector from '../components/FolderSelector';
 
 // API 函數
 const API_BASE_URL = "http://127.0.0.1:8000";
@@ -317,11 +316,18 @@ const AdminChapterPage = () => {
                         <label className="block text-sm font-medium text-gray-700 mb-1">
                             資料夾路徑
                         </label>
-                        <FolderSelector
+                        <input
+                            type="text"
+                            name="folder_path"
                             value={formData.folder_path}
                             onChange={handleInputChange}
-                            placeholder="例: materials/chapter1"
+                            className="input-field"
+                            placeholder="例: data/chapter1"
+                            required
                         />
+                        <p className="text-xs text-gray-500 mt-1">
+                            系統會自動創建 materials 和 question_bank 子資料夾
+                        </p>
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">
